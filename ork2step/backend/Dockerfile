@@ -1,6 +1,6 @@
-FROM --platform=linux/arm64 python:3.11-slim
+FROM condaforge/miniforge3:latest
 
-# CadQuery system dependencies (ARM-compatible package names)
+# System dependencies
 RUN apt-get update && apt-get install -y \
     libgl1 \
     libglu1-mesa \
@@ -8,11 +8,19 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Install cadquery via conda - only reliable method on ARM64
+RUN conda install -y -c cadquery -c conda-forge cadquery python=3.11 && \
+    conda clean -afy
+
+# Install web framework deps
+RUN pip install --no-cache-dir \
+    fastapi==0.111.0 \
+    "uvicorn[standard]==0.29.0" \
+    python-multipart==0.0.9 \
+    lxml \
+    pydantic==2.7.1
+
 WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
 
 EXPOSE 8000

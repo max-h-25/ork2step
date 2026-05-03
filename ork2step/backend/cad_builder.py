@@ -141,41 +141,55 @@ class CadBuilder:
 
     def _nose_cone(self, nc: NoseCone) -> cq.Workplane:
         """
-        Build a hollow nose cone as a shell (solid outer - solid inner).
-
-        All nose shapes are approximated by a swept profile wire revolved
-        around the Z-axis, giving a true solid of revolution.
+        Build a nose cone as a revolved polyline profile.
+        Uses 32 straight segments to approximate the curve — robust on all platforms.
         """
-        L   = _mm(nc.length)
-        R   = _mm(nc.base_diameter) / 2.0
-        t   = _mm(nc.thickness)
-        Ri  = max(R - t, 0.5)  # inner radius at base
+        L  = _mm(nc.length)
+        R  = _mm(nc.base_diameter) / 2.0
+        t  = _mm(nc.thickness)
+        Ri = max(R - t, 1.0)
+        n  = 32
 
-        # Outer profile points (tip → base, 2D in XZ plane, X=radius, Z=axial)
-        outer_pts = self._nose_profile(nc.shape, L, R, nc.shape_parameter, n=80)
+        # Sample outer profile points from tip to base
+        outer_pts = []
+        for i in range(n + 1):
+            frac = i / n
+            r = self._nose_radius_at(nc.shape, frac, R, nc.shape_parameter)
+            z = frac * L
+            outer_pts.append((r, z))
 
-        # Build outer solid of revolution
-        outer = (
-            cq.Workplane("XZ")
-            .spline(outer_pts)
-            .close()
-            .revolve(360, (0, 0, 0), (0, 1, 0))
-        )
-
-        if t > 0 and Ri > 1.0:
-            # Inner profile (offset inward)
-            inner_pts = self._nose_profile(nc.shape, L - t, Ri, nc.shape_parameter, n=80)
-            inner = (
+        # Build outer solid via polyline + revolve
+        try:
+            wp = cq.Workplane("XZ").moveTo(0, 0)
+            for pt in outer_pts[1:]:
+                wp = wp.lineTo(pt[0], pt[1])
+            wp = wp.lineTo(0, L).close()
+            outer = wp.revolve(360, (0, 0, 0), (0, 1, 0))
+        except Exception:
+            # Fallback: simple cone
+            outer = (
                 cq.Workplane("XZ")
-                .moveTo(0, t)           # start at inner tip
-                .spline(inner_pts)
+                .moveTo(0, 0)
+                .lineTo(R, L)
+                .lineTo(0, L)
                 .close()
                 .revolve(360, (0, 0, 0), (0, 1, 0))
             )
+
+        # Hollow out the inside
+        if t > 0 and Ri > 1.0:
             try:
+                wp2 = cq.Workplane("XZ").moveTo(0, t)
+                for i in range(1, n + 1):
+                    frac = i / n
+                    r = self._nose_radius_at(nc.shape, frac, Ri, nc.shape_parameter)
+                    z = t + frac * (L - t)
+                    wp2 = wp2.lineTo(r, z)
+                wp2 = wp2.lineTo(0, L).close()
+                inner = wp2.revolve(360, (0, 0, 0), (0, 1, 0))
                 outer = outer.cut(inner)
             except Exception:
-                pass  # If cut fails, return solid nose — still valid geometry
+                pass  # Return solid nose if hollowing fails
 
         return outer
 
