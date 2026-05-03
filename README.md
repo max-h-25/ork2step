@@ -46,43 +46,61 @@ in the bottom-left corner before continuing.
 
 #### 2. Download the project
 
-If you have Git:
+**Without Git** — download the ZIP directly:
+
+> **[⬇ Download ork2step.zip](https://github.com/your-username/ork2step/archive/refs/heads/main.zip)**
+
+Once downloaded:
+- **macOS**: double-click the ZIP to extract, then open Terminal and `cd` into the folder
+- **Windows**: right-click → "Extract All", then open Command Prompt and `cd` into the folder
+- **Linux**: `unzip ork2step.zip && cd ork2step`
+
+**With Git:**
 ```bash
 git clone https://github.com/your-username/ork2step.git
 cd ork2step
 ```
 
-Or download and unzip the ZIP release, then open a terminal inside the
-`ork2step` folder.
+#### 3. (macOS only) Set up the desktop icon
 
-#### 3. Start the application
+Run the installer once — it creates a clickable icon on your Desktop that
+launches the app automatically from that point on:
+
+```bash
+double-click install.command
+```
+
+If macOS blocks it, right-click → Open → Open anyway.
+
+From then on, just double-click the **ork2step icon on your Desktop** to start.
+It will open Docker automatically, wait for containers to be ready, and open
+your browser to `http://localhost:3000`.
+
+To stop the app, double-click **`stop.command`** in the project folder.
+
+#### 4. Start manually (any OS)
+
+If you prefer the terminal, or you're on Windows/Linux:
 
 ```bash
 docker compose up --build
 ```
 
 The first run downloads base images and installs all dependencies — this takes
-3–10 minutes depending on your connection. Subsequent starts are fast.
+3–10 minutes. Subsequent starts are fast (under 10 seconds).
 
-You will see log output from both the backend and frontend. When you see:
-
+When you see:
 ```
 frontend  | Local:   http://localhost:3000/
 backend   | Application startup complete.
 ```
 
-the app is ready.
+go to **http://localhost:3000** in your browser.
 
-#### 4. Open the app
+To stop: press `Ctrl+C`, then `docker compose down`.
 
-Go to **http://localhost:3000** in your browser.
-
-#### 5. Stop the app
-
-Press `Ctrl+C` in the terminal, then run:
-```bash
-docker compose down
-```
+> **Apple Silicon (M1/M2/M3)**: the Dockerfiles are already configured for
+> ARM64 — no extra steps needed.
 
 ---
 
@@ -114,12 +132,17 @@ If any of those commands fail or return an old version, install/update:
 
 #### 1. Download the project
 
+**Without Git** — download the ZIP directly:
+
+> **[⬇ Download ork2step.zip](https://github.com/your-username/ork2step/archive/refs/heads/main.zip)**
+
+Extract it, then open a terminal inside the `ork2step` folder.
+
+**With Git:**
 ```bash
 git clone https://github.com/your-username/ork2step.git
 cd ork2step
 ```
-
-Or unzip the release and open a terminal inside the `ork2step` folder.
 
 #### 2. Set up the Python backend
 
@@ -229,7 +252,7 @@ uvicorn main:app --reload --port 8000
 
 ```bash
 sudo apt update
-sudo apt install libgl1-mesa-glx libglu1-mesa libxrender1
+sudo apt install libgl1 libglu1-mesa libxrender1 libgomp1
 pip install -r requirements.txt
 ```
 
@@ -278,6 +301,10 @@ ork2step/
 │   └── Dockerfile
 ├── examples/
 │   └── alpha_iii_example.ork   # Minimal test file (raw XML)
+├── ork2step.app/                # macOS app bundle (desktop icon)
+├── install.command              # Run once — creates Desktop icon
+├── start.command                # Start the app manually
+├── stop.command                 # Stop the app cleanly
 ├── docker-compose.yml
 └── README.md
 ```
