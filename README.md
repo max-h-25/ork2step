@@ -48,7 +48,7 @@ in the bottom-left corner before continuing.
 
 **Without Git** — download the ZIP directly:
 
-> **[⬇ Download ork2step.zip](https://github.com/max-h-25/ork2step/archive/refs/heads/main.zip)**
+> **[⬇ Download ork2step.zip](https://github.com/your-username/ork2step/archive/refs/heads/main.zip)**
 
 Once downloaded:
 - **macOS**: double-click the ZIP to extract, then open Terminal and `cd` into the folder
@@ -63,18 +63,17 @@ cd ork2step
 
 #### 3. (macOS only) Set up the desktop icon
 
-Run the installer once — it creates a clickable icon on your Desktop that
-launches the app automatically from that point on:
+Open **Terminal**, paste this single line, and press Enter:
 
 ```bash
-double-click install.command
+cd ~/Downloads/ork2step && xattr -rd com.apple.quarantine . && chmod +x install.command start.command stop.command && ./install.command
 ```
 
-If macOS blocks it, right-click → Open → Open anyway.
+> If your folder is named something different (like `ork2step 6`), replace `ork2step` in the `cd` path above with the actual folder name.
 
-From then on, just double-click the **ork2step icon on your Desktop** to start.
-It will open Docker automatically, wait for containers to be ready, and open
-your browser to `http://localhost:3000`.
+This strips the macOS security block from all files and creates a clickable **ork2step icon on your Desktop**.
+
+From then on, just **double-click the Desktop icon** to launch — it starts Docker automatically, waits for everything to be ready, and opens your browser to `http://localhost:3000`.
 
 To stop the app, double-click **`stop.command`** in the project folder.
 
