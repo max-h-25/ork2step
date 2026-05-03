@@ -1,4 +1,17 @@
 #!/bin/bash
-# Find the ork2step folder (the .app lives inside it)
-SCRIPT_DIR="$(cd "$(dirname "$0")/../../../.." && pwd)"
-exec "$SCRIPT_DIR/start.command"
+# Resolve the true location of this script, following symlinks
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+# Go up 3 levels: MacOS -> Contents -> ork2step.app -> project root
+PROJ_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+osascript -e "tell application \"Terminal\"
+    activate
+    do script \"cd '${PROJ_DIR}' && ./start.command\"
+end tell"
