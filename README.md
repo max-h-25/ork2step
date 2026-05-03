@@ -48,7 +48,7 @@ in the bottom-left corner before continuing.
 
 **Without Git** — download the ZIP directly:
 
-> **[⬇ Download ork2step.zip](https://github.com/your-username/ork2step/archive/refs/heads/main.zip)**
+> **[⬇ Download ork2step.zip](https://github.com/max-h-25/ork2step/archive/refs/heads/main.zip)**
 
 Once downloaded:
 - **macOS**: double-click the ZIP to extract, then open Terminal and `cd` into the folder
