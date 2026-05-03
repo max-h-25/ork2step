@@ -48,7 +48,7 @@ in the bottom-left corner before continuing.
 
 **Without Git** — download the ZIP directly:
 
-> **[⬇ Download ork2step.zip](https://github.com/max-h-25/ork2step/archive/refs/heads/main.zip)**
+> **[⬇ Download ork2step.zip](https://github.com/your-username/ork2step/archive/refs/heads/main.zip)**
 
 Once downloaded:
 - **macOS**: double-click the ZIP to extract, then open Terminal and `cd` into the folder
@@ -66,7 +66,7 @@ cd ork2step
 Open **Terminal**, paste this single line, and press Enter:
 
 ```bash
-cd ~/Downloads/ork2step-main/ork2step && xattr -rd com.apple.quarantine . && chmod +x install.command start.command stop.command && ./install.command
+cd ~/Downloads/ork2step && xattr -rd com.apple.quarantine . && chmod +x install.command start.command stop.command && ./install.command
 ```
 
 > If your folder is named something different (like `ork2step 6`), replace `ork2step` in the `cd` path above with the actual folder name.
