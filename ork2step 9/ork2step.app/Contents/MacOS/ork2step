@@ -1,4 +1,0 @@
-#!/bin/bash
-# Find the ork2step folder (the .app lives inside it)
-SCRIPT_DIR="$(cd "$(dirname "$0")/../../../.." && pwd)"
-exec "$SCRIPT_DIR/start.command"
