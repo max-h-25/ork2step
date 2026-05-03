@@ -66,7 +66,7 @@ cd ork2step
 Open **Terminal**, paste this single line, and press Enter:
 
 ```bash
-cd ~/Downloads/ork2step && xattr -rd com.apple.quarantine . && chmod +x install.command start.command stop.command && ./install.command
+cd ~/Downloads/ork2step-main/ork2step && xattr -rd com.apple.quarantine . && chmod +x install.command start.command stop.command && ./install.command
 ```
 
 > If your folder is named something different (like `ork2step 6`), replace `ork2step` in the `cd` path above with the actual folder name.
