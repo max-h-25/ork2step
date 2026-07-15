@@ -24,6 +24,8 @@ import math
 import os
 import sys
 import tempfile
+import time
+import uuid
 from typing import Optional
 
 try:
@@ -113,6 +115,20 @@ class CadBuilder:
         asm = cq.Assembly(name=rocket.name or "rocket")
         z_cursor = 0.0  # running Z position in mm (nose tip = 0)
 
+        # cq.Assembly requires every part name to be unique. OpenRocket
+        # files routinely have multiple components with the identical
+        # name (e.g. two "Body Tube" segments, or several fin sets all
+        # called "Fin Set") — track every name used across the ENTIRE
+        # assembly (not just within one component) and auto-number any
+        # repeat so .add() never collides.
+        used_names: dict[str, int] = {}
+
+        def _unique_name(base: str) -> str:
+            base = _safe_name(base) or "part"
+            count = used_names.get(base, 0)
+            used_names[base] = count + 1
+            return base if count == 0 else f"{base}_{count + 1}"
+
         for stage_list in rocket.stages:
             for comp in _walk_list(stage_list):
                 _log(f"building component: {comp.name} ({type(comp).__name__})")
@@ -120,10 +136,8 @@ class CadBuilder:
                 if not solids:
                     _log(f"  -> skipped (no geometry produced)")
                     continue
-                for idx, solid in enumerate(solids):
-                    name = _safe_name(comp.name)
-                    if len(solids) > 1:
-                        name = f"{name}_{idx}"
+                for solid in solids:
+                    name = _unique_name(comp.name)
                     asm.add(
                         solid,
                         name=name,
@@ -426,21 +440,52 @@ class CadBuilder:
     # ------------------------------------------------------------------
 
     def _export_step(self, assembly: cq.Assembly) -> bytes:
-        """Export assembly to STEP and return as bytes."""
-        _log(f"exporting STEP with {len(assembly.children)} top-level solids...")
-        with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
-            tmp_path = tmp.name
+        """
+        Export assembly to STEP and return as bytes.
 
-        try:
-            assembly.save(tmp_path, exportType="STEP")
-            _log("export finished")
-            with open(tmp_path, "rb") as fh:
-                return fh.read()
-        finally:
+        Writes to a build directory inside the project (backend/_build)
+        rather than the OS-wide system temp directory. This avoids
+        [Errno 5] I/O errors that can happen when the system TMPDIR is
+        on a synced (iCloud Drive / Dropbox) or network-mounted location,
+        or gets locked briefly by real-time antivirus scanning of a
+        freshly-created file. Also retries once after a short pause,
+        since that kind of lock is usually transient.
+        """
+        _log(f"exporting STEP with {len(assembly.children)} top-level solids...")
+
+        build_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_build")
+        os.makedirs(build_dir, exist_ok=True)
+
+        tmp_path = os.path.join(build_dir, f"{uuid.uuid4().hex}.step")
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(2):
             try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+                assembly.save(tmp_path, exportType="STEP")
+                _log("export finished")
+                with open(tmp_path, "rb") as fh:
+                    return fh.read()
+            except OSError as exc:
+                last_exc = exc
+                _log(f"export attempt {attempt + 1} failed: {exc!r} — retrying" if attempt == 0 else f"export failed: {exc!r}")
+                if attempt == 0:
+                    time.sleep(0.5)
+                    continue
+            finally:
+                try:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        raise CadBuildError(
+            f"STEP export failed with an OS-level I/O error after retrying: {last_exc}. "
+            f"This usually means the temp/build directory ({build_dir}) is on a "
+            "network drive, a cloud-synced folder (iCloud/Dropbox/Google Drive), "
+            "or is being locked by antivirus/security software. Try moving the "
+            "project to a local, non-synced folder (e.g. your home directory "
+            "directly) and running again."
+        ) from last_exc
 
 
 # ---------------------------------------------------------------------------
