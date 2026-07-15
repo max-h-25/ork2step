@@ -11,12 +11,18 @@ Design decisions:
   • Nose-cone profiles are generated analytically so they remain true solids
     (no mesh approximation).
   • Fins are extruded from a 2-D profile wire so they are parametric solids.
+  • Fins in a set are added to the assembly as SEPARATE solids rather than
+    boolean-unioned together. Repeated OCCT boolean unions of touching/
+    near-identical solids are a well-known native-crash trigger, and a
+    native crash (segfault) cannot be caught by Python try/except — it
+    kills the whole process ("python quit unexpectedly" on macOS).
 """
 
 from __future__ import annotations
 
 import math
 import os
+import sys
 import tempfile
 from typing import Optional
 
@@ -30,6 +36,11 @@ from ork_parser import (
     Rocket, NoseCone, BodyTube, Transition, FinSet, MotorMount, LaunchLug,
     NoseShape, FinShape, _walk_list,
 )
+
+
+def _log(msg: str) -> None:
+    """Print immediately (flushed) so progress is visible even right before a crash."""
+    print(f"[cad_builder] {msg}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +87,16 @@ class CadBuilder:
     def build_step(self, rocket: Rocket) -> bytes:
         """Return STEP file bytes for the full rocket."""
         assembly = self._build_assembly(rocket)
+        if len(assembly.children) == 0:
+            # Exporting a totally empty assembly is another known OCCT
+            # crash trigger (rather than a clean error) — fail loudly
+            # in Python instead.
+            raise CadBuildError(
+                "No solids were produced from this rocket model — nothing "
+                "to export. Check that the .ork file contains recognised "
+                "components (NoseCone, BodyTube, Transition, FinSet, "
+                "MotorMount, LaunchLug)."
+            )
         return self._export_step(assembly)
 
     def build_step_to_file(self, rocket: Rocket, path: str) -> None:
@@ -94,15 +115,21 @@ class CadBuilder:
 
         for stage_list in rocket.stages:
             for comp in _walk_list(stage_list):
-                solid, length_mm = self._build_component(comp)
-                if solid is None:
+                _log(f"building component: {comp.name} ({type(comp).__name__})")
+                solids, length_mm = self._build_component(comp)
+                if not solids:
+                    _log(f"  -> skipped (no geometry produced)")
                     continue
-                # Place component at z_cursor; rockets point nose-up (+Z)
-                asm.add(
-                    solid,
-                    name=_safe_name(comp.name),
-                    loc=cq.Location(cq.Vector(0, 0, z_cursor)),
-                )
+                for idx, solid in enumerate(solids):
+                    name = _safe_name(comp.name)
+                    if len(solids) > 1:
+                        name = f"{name}_{idx}"
+                    asm.add(
+                        solid,
+                        name=name,
+                        loc=cq.Location(cq.Vector(0, 0, z_cursor)),
+                    )
+                _log(f"  -> added {len(solids)} solid(s)")
                 # Only top-level components advance the cursor; children
                 # (fins, motor mounts) are positioned relative to their parent
                 # body tube, but for the flat _walk_list we only advance for
@@ -112,26 +139,26 @@ class CadBuilder:
 
         return asm
 
-    def _build_component(self, comp) -> tuple[Optional[cq.Workplane], float]:
-        """Return (solid_workplane, length_mm) or (None, 0)."""
+    def _build_component(self, comp) -> tuple[list[cq.Workplane], float]:
+        """Return (list_of_solids, length_mm). Empty list if nothing built."""
         try:
             if isinstance(comp, NoseCone):
-                return self._nose_cone(comp), _mm(comp.length)
+                return [self._nose_cone(comp)], _mm(comp.length)
             if isinstance(comp, BodyTube):
-                return self._body_tube(comp), _mm(comp.length)
+                return [self._body_tube(comp)], _mm(comp.length)
             if isinstance(comp, Transition):
-                return self._transition(comp), _mm(comp.length)
+                return [self._transition(comp)], _mm(comp.length)
             if isinstance(comp, FinSet):
                 return self._fin_set(comp), 0.0
             if isinstance(comp, MotorMount):
-                return self._motor_mount(comp), 0.0
+                return [self._motor_mount(comp)], 0.0
             if isinstance(comp, LaunchLug):
-                return self._launch_lug(comp), 0.0
+                return [self._launch_lug(comp)], 0.0
         except Exception as exc:
             raise CadBuildError(
                 f"Failed to build component '{comp.name}': {exc}"
             ) from exc
-        return None, 0.0
+        return [], 0.0
 
     # ------------------------------------------------------------------
     # Component builders
@@ -224,10 +251,6 @@ class CadBuilder:
         if shape == NoseShape.CONICAL:
             return R * t
         if shape == NoseShape.OGIVE:
-            rho = (R**2 + t**2 * (t**2)) / (2 * R)  # simple approximation
-            # True tangent-ogive: rho = (R² + L²) / (2R)
-            # r(x) = sqrt(rho² - (L-x)²) - (rho - R)
-            # Use L=1, x=t for normalised version
             rho_n = (R**2 + 1.0) / (2 * R)
             val = math.sqrt(max(rho_n**2 - (1 - t)**2, 0)) - (rho_n - R)
             return max(val, 0.0)
@@ -235,15 +258,20 @@ class CadBuilder:
             return R * math.sqrt(1 - (1 - t)**2)
         if shape == NoseShape.PARABOLIC:
             k = param if param else 1.0
+            # k == 2 makes the denominator zero (degenerate profile that
+            # can crash the OCCT revolve). Clamp away from that value.
+            if abs(2 - k) < 1e-6:
+                k = 2 - 1e-6 if k >= 2 else 2 + 1e-6
             return R * ((2 * t - k * t**2) / (2 - k))
         if shape == NoseShape.POWER:
-            n = param if param else 0.5
-            return R * (t ** n)
+            n_ = param if param else 0.5
+            n_ = max(n_, 1e-3)  # guard against 0 or negative exponents
+            return R * (t ** n_)
         if shape == NoseShape.HAACK:
-            theta = math.acos(1 - 2 * t)
+            theta = math.acos(max(-1.0, min(1.0, 1 - 2 * t)))
             C = param if param else 0.0
             return R * math.sqrt(
-                (theta - math.sin(2 * theta) / 2 + C * math.sin(theta) ** 3) / math.pi
+                max(theta - math.sin(2 * theta) / 2 + C * math.sin(theta) ** 3, 0) / math.pi
             )
         if shape == NoseShape.SPHERICAL:
             return R * math.sqrt(1 - (1 - t)**2)
@@ -305,11 +333,14 @@ class CadBuilder:
 
     # ---- Fin Set ---------------------------------------------------------
 
-    def _fin_set(self, fs: FinSet) -> cq.Workplane:
+    def _fin_set(self, fs: FinSet) -> list[cq.Workplane]:
         """
         Build a single fin as a 2-D profile extruded to thickness,
-        then pattern it angularly.  The result is placed at z=0 relative
-        to the parent BodyTube's aft end.
+        then pattern it angularly. Each fin is returned as its OWN solid
+        rather than boolean-unioned into one — repeated unions of
+        touching/identical solids are a common native OCCT crash trigger,
+        and the resulting solid is visually/functionally identical when
+        exported to STEP as separate bodies in the same assembly.
         """
         thickness_mm = _mm(fs.thickness)
         root  = _mm(fs.root_chord)
@@ -322,14 +353,12 @@ class CadBuilder:
         else:
             fin_solid = self._trapezoidal_fin(root, tip, span, sweep, thickness_mm)
 
-        # Angular pattern around Z-axis
         angle = 360.0 / max(fs.fin_count, 1)
-        result = fin_solid
+        fins = [fin_solid]
         for i in range(1, fs.fin_count):
-            rotated = fin_solid.rotate((0, 0, 0), (0, 0, 1), angle * i)
-            result = result.union(rotated)
+            fins.append(fin_solid.rotate((0, 0, 0), (0, 0, 1), angle * i))
 
-        return result
+        return fins
 
     def _trapezoidal_fin(
         self, root: float, tip: float, span: float, sweep: float, thickness: float
@@ -398,11 +427,13 @@ class CadBuilder:
 
     def _export_step(self, assembly: cq.Assembly) -> bytes:
         """Export assembly to STEP and return as bytes."""
+        _log(f"exporting STEP with {len(assembly.children)} top-level solids...")
         with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
             assembly.save(tmp_path, exportType="STEP")
+            _log("export finished")
             with open(tmp_path, "rb") as fh:
                 return fh.read()
         finally:
