@@ -57,7 +57,7 @@ Once downloaded:
 
 **With Git:**
 ```bash
-git clone https://github.com/your-username/ork2step.git
+git clone https://github.com/max-h-25/ork2step.git
 cd ork2step
 ```
 
@@ -76,6 +76,9 @@ This strips the macOS security block from all files and creates a clickable **or
 From then on, just **double-click the Desktop icon** to launch — it starts Docker automatically, waits for everything to be ready, and opens your browser to `http://localhost:3000`.
 
 To stop the app, double-click **`stop.command`** in the project folder.
+
+> **If macOS says it "could not verify" `install.command` is free of malware:**
+> That's normal Gatekeeper behavior for any script downloaded from the internet — not a sign anything's actually wrong. Right-clicking (or Ctrl-clicking) the file and choosing Open doesn't reliably bypass it. Instead, do it from Terminal: run the `cd ... && ./install.command` line above exactly as written. The `xattr -rd com.apple.quarantine` part strips the block before the script ever runs, so Gatekeeper won't stop it.
 
 #### 4. Start manually (any OS)
 
@@ -133,13 +136,13 @@ If any of those commands fail or return an old version, install/update:
 
 **Without Git** — download the ZIP directly:
 
-> **[⬇ Download ork2step.zip](https://github.com/your-username/ork2step/archive/refs/heads/main.zip)**
+> **[⬇ Download ork2step.zip](https://github.com/max-h-25/ork2step/archive/refs/heads/main.zip)**
 
 Extract it, then open a terminal inside the `ork2step` folder.
 
 **With Git:**
 ```bash
-git clone https://github.com/your-username/ork2step.git
+git clone https://github.com/max-h-25/ork2step.git
 cd ork2step
 ```
 
