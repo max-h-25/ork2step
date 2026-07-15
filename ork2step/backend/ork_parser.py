@@ -306,10 +306,26 @@ class OrkParser:
     # ------------------------------------------------------------------
 
     def _f(self, el: etree._Element, tag: str, default: float = 0.0) -> float:
-        """Read a float child element, return default if missing."""
+        """
+        Read a float child element, return default if missing.
+
+        Handles OpenRocket's "automatic" dimension format, where a field
+        that's set to Automatic in the GUI is serialised as the string
+        "auto <resolved_value>" instead of a plain number — e.g.
+        <radius>auto 0.0225</radius>. In that case we still want the
+        resolved value (0.0225), not the default/0.
+        """
         txt = el.findtext(tag)
         if txt is None:
             return default
+        txt = txt.strip()
+        if txt.lower().startswith("auto"):
+            # Strip the "auto" marker and any following whitespace, keep
+            # the resolved numeric value that OpenRocket wrote alongside it.
+            txt = txt[4:].strip()
+            if not txt:
+                # "auto" with no resolved value present — genuinely unknown
+                return default
         try:
             return float(txt)
         except ValueError:
@@ -354,12 +370,16 @@ class OrkParser:
 
     def _parse_body_tube(self, el: etree._Element, axial_offset: float) -> BodyTube:
         name = el.findtext("name", "Body Tube")
-        # OrkRocket stores radius, not diameter in some versions
+        # OpenRocket stores radius (not diameter) here, and it may be in
+        # "auto <value>" format if the user set diameter to Automatic —
+        # _f() resolves that for us now.
         od = self._f(el, "outerdiameter", 0)
         if od == 0:
             od = self._f(el, "radius", 0) * 2
         if od == 0:
             od = self._f(el, "aftradius", 0) * 2  # fallback
+        if od == 0:
+            od = self._f(el, "outerradius", 0) * 2  # seen on tube couplers etc.
         length = self._f(el, "length")
         thickness = self._require_thickness(el, name, default=0.002)
 
