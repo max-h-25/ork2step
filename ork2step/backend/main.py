@@ -10,6 +10,16 @@ GET  /health          Liveness check
 
 from __future__ import annotations
 
+import faulthandler
+import sys
+
+# Ask Python to dump a stack trace to stderr if the process receives a
+# fatal signal (e.g. SIGSEGV from the native OCCT/CAD kernel). This can't
+# "fix" a native crash, but it turns a silent "python quit unexpectedly"
+# into a printed traceback showing which Python line was running when it
+# happened — that's the fastest way to find the actual offending geometry.
+faulthandler.enable(file=sys.stderr, all_threads=True)
+
 import os
 import uuid
 import logging
@@ -166,6 +176,7 @@ async def generate_step(req: GenerateRequest, background_tasks: BackgroundTasks)
     _apply_overrides(rocket, missing, req.param_overrides)
 
     # ---- build STEP -------------------------------------------------------
+    log.info("Starting CAD build for rocket '%s'...", rocket.name)
     try:
         builder = CadBuilder()
         step_bytes = builder.build_step(rocket)
@@ -181,6 +192,7 @@ async def generate_step(req: GenerateRequest, background_tasks: BackgroundTasks)
             status_code=500,
             detail=f"Unexpected error during model generation: {exc}",
         )
+    log.info("CAD build finished (%d bytes)", len(step_bytes))
 
     # Clean up session after successful generation
     background_tasks.add_task(_sessions.pop, req.session_id, None)
