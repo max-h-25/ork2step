@@ -131,12 +131,31 @@ class LaunchLug(RocketComponent):
 
 
 @dataclass
+class CenteringRing(RocketComponent):
+    outer_diameter: float = 0.0    # m — matches the body tube ID it sits in
+    inner_diameter: float = 0.0    # m — matches the motor mount OD it holds
+    length: float = 0.0            # m — thickness of the ring, along the axis
+
+
+@dataclass
+class TubeCoupler(RocketComponent):
+    outer_diameter: float = 0.0    # m
+    inner_diameter: float = 0.0    # m
+    length: float = 0.0            # m
+
+
+@dataclass
 class Rocket:
     name: str = "Unnamed Rocket"
     designer: str = ""
     comment: str = ""
     # Ordered list of top-level components (nose → body → ...)
     stages: list = field(default_factory=list)
+    # Component types found in the .ork that this parser doesn't support
+    # yet (e.g. bulkheads, engine blocks, tube fins) — populated after
+    # parsing so callers/UI can show a "not included" warning instead of
+    # those parts just silently not appearing in the STEP output.
+    skipped_components: list = field(default_factory=list)
 
     def all_components(self):
         """Flat iterator over all components in assembly order."""
@@ -181,6 +200,7 @@ class OrkParser:
 
     def __init__(self):
         self.missing: list[MissingParam] = []
+        self.skipped_components: list[str] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -255,6 +275,7 @@ class OrkParser:
             components = self._parse_subcomponents(rocket_el, axial_base=0.0)
             rocket.stages.append(components)
 
+        rocket.skipped_components = self.skipped_components
         return rocket
 
     # ------------------------------------------------------------------
@@ -295,11 +316,19 @@ class OrkParser:
             "launchlug":   self._parse_launch_lug,
             "innertubecomponent": self._parse_body_tube,
             "innertube":   self._parse_body_tube,
+            "centeringring": self._parse_centering_ring,
+            "tubecoupler": self._parse_tube_coupler,
         }
         handler = handlers.get(tag)
         if handler:
             return handler(el, axial_offset)
-        return None  # unknown element — skip silently
+        # Unknown/unsupported element — record it instead of silently
+        # dropping it, so it's visible to the user (and to us) instead
+        # of a part just quietly not appearing in the output.
+        if tag not in ("subcomponents",):
+            name = el.findtext("name", tag)
+            self.skipped_components.append(f"{tag} '{name}'")
+        return None
 
     # ------------------------------------------------------------------
     # Individual component parsers
@@ -477,6 +506,46 @@ class OrkParser:
             length=length,
         )
 
+    def _parse_centering_ring(self, el: etree._Element, axial_offset: float) -> CenteringRing:
+        name = el.findtext("name", "Centering Ring")
+        od = self._f(el, "outerdiameter", 0)
+        if od == 0:
+            od = self._f(el, "outerradius", 0) * 2
+        id_ = self._f(el, "innerdiameter", 0)
+        if id_ == 0:
+            id_ = self._f(el, "innerradius", 0) * 2
+        length = self._f(el, "length", 0.003)  # rings are usually thin; default 3mm
+        return CenteringRing(
+            name=name,
+            axial_offset=axial_offset,
+            outer_diameter=od,
+            inner_diameter=id_,
+            length=length,
+        )
+
+    def _parse_tube_coupler(self, el: etree._Element, axial_offset: float) -> TubeCoupler:
+        name = el.findtext("name", "Tube Coupler")
+        od = self._f(el, "outerdiameter", 0)
+        if od == 0:
+            od = self._f(el, "outerradius", 0) * 2
+        id_ = self._f(el, "innerdiameter", 0)
+        if id_ == 0:
+            id_ = self._f(el, "innerradius", 0) * 2
+        if id_ == 0:
+            # Tube couplers commonly store wall thickness instead of an
+            # inner radius/diameter directly.
+            wall = self._f(el, "thickness", 0)
+            if wall > 0 and od > 0:
+                id_ = max(od - 2 * wall, 0)
+        length = self._f(el, "length")
+        return TubeCoupler(
+            name=name,
+            axial_offset=axial_offset,
+            outer_diameter=od,
+            inner_diameter=id_,
+            length=length,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Pretty-print helper (for debugging / UI preview)
@@ -490,6 +559,11 @@ def summarise(rocket: Rocket) -> str:
         lines.append(f"  Stage {stage_i + 1}:")
         for comp in _walk_list(stage):
             lines.append(_fmt_component(comp))
+    if rocket.skipped_components:
+        lines.append("")
+        lines.append("  ⚠ Not yet supported — excluded from the STEP output:")
+        for item in rocket.skipped_components:
+            lines.append(f"    {item}")
     return "\n".join(lines)
 
 
@@ -534,5 +608,17 @@ def _fmt_component(comp) -> str:
         return (
             f"{prefix}MotorMount '{comp.name}': "
             f"ID={comp.inner_diameter*1000:.1f}mm, L={comp.length*1000:.1f}mm"
+        )
+    if isinstance(comp, CenteringRing):
+        return (
+            f"{prefix}CenteringRing '{comp.name}': "
+            f"OD={comp.outer_diameter*1000:.1f}mm, ID={comp.inner_diameter*1000:.1f}mm, "
+            f"L={comp.length*1000:.1f}mm"
+        )
+    if isinstance(comp, TubeCoupler):
+        return (
+            f"{prefix}TubeCoupler '{comp.name}': "
+            f"OD={comp.outer_diameter*1000:.1f}mm, ID={comp.inner_diameter*1000:.1f}mm, "
+            f"L={comp.length*1000:.1f}mm"
         )
     return f"{prefix}{type(comp).__name__} '{comp.name}'"
