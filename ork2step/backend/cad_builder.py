@@ -36,7 +36,7 @@ except ImportError:
 
 from ork_parser import (
     Rocket, NoseCone, BodyTube, Transition, FinSet, MotorMount, LaunchLug,
-    CenteringRing, TubeCoupler,
+    CenteringRing, TubeCoupler, Bulkhead, EngineBlock,
     NoseShape, FinShape, _walk_list,
 )
 
@@ -158,7 +158,7 @@ class CadBuilder:
         """Return (list_of_solids, length_mm). Empty list if nothing built."""
         try:
             if isinstance(comp, NoseCone):
-                return [self._nose_cone(comp)], _mm(comp.length)
+                return self._nose_cone(comp), _mm(comp.length)
             if isinstance(comp, BodyTube):
                 return [self._body_tube(comp)], _mm(comp.length)
             if isinstance(comp, Transition):
@@ -173,6 +173,10 @@ class CadBuilder:
                 return [self._centering_ring(comp)], 0.0
             if isinstance(comp, TubeCoupler):
                 return [self._tube_coupler(comp)], 0.0
+            if isinstance(comp, Bulkhead):
+                return [self._bulkhead(comp)], 0.0
+            if isinstance(comp, EngineBlock):
+                return [self._engine_block(comp)], 0.0
         except Exception as exc:
             raise CadBuildError(
                 f"Failed to build component '{comp.name}': {exc}"
@@ -185,18 +189,27 @@ class CadBuilder:
 
     # ---- Nose Cone -------------------------------------------------------
 
-    def _nose_cone(self, nc: NoseCone) -> cq.Workplane:
+    def _nose_cone(self, nc: NoseCone) -> list[cq.Workplane]:
         """
-        Build a nose cone as a revolved polyline profile.
-        Uses 32 straight segments to approximate the curve — robust on all platforms.
+        Build a nose cone as a revolved polyline profile, hollowed with
+        CadQuery's shell() rather than a hand-built inner profile.
+
+        The earlier approach revolved a SECOND hand-computed inner profile
+        and cut it from the solid nose. That's fragile: near the tip, the
+        offset inner profile and outer profile converge to nearly the same
+        point, which can produce a degenerate/self-intersecting cut and
+        visible mesh artifacts. shell() lets OCCT compute the offset
+        surface itself, which handles that convergence correctly.
+
+        Returns a list of solids: [nose_body] or [nose_body, shoulder] if
+        the .ork file specifies a shoulder (the cylindrical plug that
+        inserts into the body tube).
         """
         L  = _mm(nc.length)
         R  = _mm(nc.base_diameter) / 2.0
         t  = _mm(nc.thickness)
-        Ri = max(R - t, 1.0)
         n  = 32
 
-        # Sample outer profile points from tip to base
         outer_pts = []
         for i in range(n + 1):
             frac = i / n
@@ -204,16 +217,15 @@ class CadBuilder:
             z = frac * L
             outer_pts.append((r, z))
 
-        # Build outer solid via polyline + revolve
         try:
             wp = cq.Workplane("XZ").moveTo(0, 0)
             for pt in outer_pts[1:]:
                 wp = wp.lineTo(pt[0], pt[1])
             wp = wp.lineTo(0, L).close()
-            outer = wp.revolve(360, (0, 0, 0), (0, 1, 0))
+            solid = wp.revolve(360, (0, 0, 0), (0, 1, 0))
         except Exception:
             # Fallback: simple cone
-            outer = (
+            solid = (
                 cq.Workplane("XZ")
                 .moveTo(0, 0)
                 .lineTo(R, L)
@@ -222,23 +234,45 @@ class CadBuilder:
                 .revolve(360, (0, 0, 0), (0, 1, 0))
             )
 
-        # Hollow out the inside
-        if t > 0 and Ri > 1.0:
+        if t > 0 and t < R:
             try:
-                inner_L = max(L - t, 1.0)
-                wp2 = cq.Workplane("XZ").moveTo(0, t)
-                for i in range(1, n + 1):
-                    frac = i / n
-                    r = self._nose_radius_at(nc.shape, frac, Ri, nc.shape_parameter, inner_L)
-                    z = t + frac * (L - t)
-                    wp2 = wp2.lineTo(r, z)
-                wp2 = wp2.lineTo(0, L).close()
-                inner = wp2.revolve(360, (0, 0, 0), (0, 1, 0))
-                outer = outer.cut(inner)
+                # Open (unshelled) face is the flat base at z=L — select
+                # it by its normal direction (+Z) and shell inward,
+                # leaving the base open like a real hollow nose cone.
+                solid = solid.faces(">Z").shell(-t)
             except Exception:
-                pass  # Return solid nose if hollowing fails
+                pass  # keep the solid nose if shelling fails
 
-        return outer
+        solids = [solid]
+
+        # ---- Shoulder: the cylindrical plug that inserts into the body tube
+        if nc.shoulder_length > 0 and nc.shoulder_diameter > 0:
+            try:
+                solids.append(self._nose_shoulder(nc, L))
+            except Exception:
+                pass  # nose body is still valid even if the shoulder fails
+
+        return solids
+
+    def _nose_shoulder(self, nc: NoseCone, nose_length_mm: float) -> cq.Workplane:
+        """
+        Build the shoulder as a short tube (or solid plug, if capped)
+        extending aft from the base of the nose (z = nose_length_mm
+        onward), sized to slide into the body tube.
+        """
+        sh_OD = _mm(nc.shoulder_diameter)
+        sh_L  = _mm(nc.shoulder_length)
+        sh_t  = _mm(nc.shoulder_thickness)
+
+        if nc.shoulder_capped or sh_t <= 0 or sh_t >= sh_OD / 2:
+            shoulder = cq.Workplane("XY").circle(sh_OD / 2).extrude(sh_L)
+        else:
+            shoulder = self._hollow_tube(
+                sh_OD, sh_OD - 2 * sh_t, sh_L, label=f"NoseCone shoulder '{nc.name}'"
+            )
+
+        # Position it starting right where the nose body's base ends.
+        return shoulder.translate((0, 0, nose_length_mm))
 
     def _nose_profile(
         self,
@@ -310,21 +344,40 @@ class CadBuilder:
         # fallback → conical
         return R * t
 
+    # ---- Shared hollow-tube helper ----------------------------------------
+
+    def _hollow_tube(self, OD: float, ID: float, L: float, label: str = "tube") -> cq.Workplane:
+        """
+        Build a hollow cylinder explicitly: outer solid, inner solid, cut.
+
+        Deliberately NOT using the `.circle(OD/2).circle(ID/2).extrude(L)`
+        shorthand — that relies on CadQuery inferring the inner circle is a
+        hole from wire nesting, which can silently produce a solid instead
+        of a hollow tube on some inputs instead of raising an error. An
+        explicit cut fails loudly (a real exception) if the geometry is
+        degenerate, instead of quietly handing back the wrong shape.
+        """
+        if ID <= 0:
+            raise CadBuildError(
+                f"{label}: inner diameter resolved to {ID:.3f}mm (must be > 0)."
+            )
+        if ID >= OD:
+            raise CadBuildError(
+                f"{label}: inner diameter ({ID:.3f}mm) is not smaller than "
+                f"outer diameter ({OD:.3f}mm) — can't build a hollow wall."
+            )
+        outer = cq.Workplane("XY").circle(OD / 2).extrude(L)
+        inner = cq.Workplane("XY").circle(ID / 2).extrude(L)
+        return outer.cut(inner)
+
     # ---- Body Tube -------------------------------------------------------
 
     def _body_tube(self, bt: BodyTube) -> cq.Workplane:
         OD = _mm(bt.outer_diameter)
         L  = _mm(bt.length)
         t  = _mm(bt.thickness)
-        ID = max(OD - 2 * t, 1.0)
-
-        tube = (
-            cq.Workplane("XY")
-            .circle(OD / 2)
-            .circle(ID / 2)
-            .extrude(L)
-        )
-        return tube
+        ID = OD - 2 * t
+        return self._hollow_tube(OD, ID, L, label=f"BodyTube '{bt.name}'")
 
     # ---- Transition (shoulder) -------------------------------------------
 
@@ -427,17 +480,10 @@ class CadBuilder:
     # ---- Motor Mount -----------------------------------------------------
 
     def _motor_mount(self, mm_: MotorMount) -> cq.Workplane:
-        OD = max(_mm(mm_.inner_diameter) + 4.0, _mm(mm_.inner_diameter) * 1.15)
         ID = _mm(mm_.inner_diameter)
+        OD = max(ID + 4.0, ID * 1.15)
         L  = _mm(mm_.length)
-
-        tube = (
-            cq.Workplane("XY")
-            .circle(OD / 2)
-            .circle(ID / 2)
-            .extrude(L)
-        )
-        return tube
+        return self._hollow_tube(OD, ID, L, label=f"MotorMount '{mm_.name}'")
 
     # ---- Launch Lug ------------------------------------------------------
 
@@ -445,13 +491,7 @@ class CadBuilder:
         OD = _mm(ll.outer_diameter) or 12.0
         ID = _mm(ll.inner_diameter) or 9.0
         L  = _mm(ll.length) or 40.0
-
-        return (
-            cq.Workplane("XY")
-            .circle(OD / 2)
-            .circle(ID / 2)
-            .extrude(L)
-        )
+        return self._hollow_tube(OD, ID, L, label=f"LaunchLug '{ll.name}'")
 
     # ---- Centering Ring ---------------------------------------------------
 
@@ -462,13 +502,7 @@ class CadBuilder:
         L  = _mm(cr.length) or 3.0
         if ID >= OD:
             ID = max(OD - 2.0, 1.0)  # guard against degenerate/zero-clearance rings
-
-        return (
-            cq.Workplane("XY")
-            .circle(OD / 2)
-            .circle(ID / 2)
-            .extrude(L)
-        )
+        return self._hollow_tube(OD, ID, L, label=f"CenteringRing '{cr.name}'")
 
     # ---- Tube Coupler -------------------------------------------------------
 
@@ -479,13 +513,28 @@ class CadBuilder:
         L  = _mm(tc.length) or 50.0
         if ID >= OD:
             ID = max(OD - 4.0, 1.0)
+        return self._hollow_tube(OD, ID, L, label=f"TubeCoupler '{tc.name}'")
 
-        return (
-            cq.Workplane("XY")
-            .circle(OD / 2)
-            .circle(ID / 2)
-            .extrude(L)
-        )
+    # ---- Bulkhead -----------------------------------------------------------
+
+    def _bulkhead(self, bh: Bulkhead) -> cq.Workplane:
+        """A solid disc sealing off a body tube — no center hole."""
+        OD = _mm(bh.outer_diameter) or 40.0
+        L  = _mm(bh.length) or 3.0
+        return cq.Workplane("XY").circle(OD / 2).extrude(L)
+
+    # ---- Engine Block ---------------------------------------------------------
+
+    def _engine_block(self, eb: EngineBlock) -> cq.Workplane:
+        """A ring that seats the motor casing against the body tube."""
+        OD = _mm(eb.outer_diameter) or 40.0
+        ID = _mm(eb.inner_diameter) or 20.0
+        L  = _mm(eb.length) or 5.0
+        if ID <= 0 or ID >= OD:
+            # No usable inner hole given — treat it as a solid disc rather
+            # than guessing at a clearance hole.
+            return cq.Workplane("XY").circle(OD / 2).extrude(L)
+        return self._hollow_tube(OD, ID, L, label=f"EngineBlock '{eb.name}'")
 
     # ------------------------------------------------------------------
     # STEP export
