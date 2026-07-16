@@ -9,12 +9,16 @@ into Autodesk Fusion 360, FreeCAD, SolidWorks, or any STEP-capable CAD tool.
 
 | Capability | Detail |
 |---|---|
-| **Nose cones** | Ogive, conical, ellipsoid, parabolic, power-series, Haack, spherical |
+| **Nose cones** | Ogive, conical, ellipsoid, parabolic, power-series, Haack, spherical — including shoulder geometry if the .ork specifies one |
 | **Body tubes** | Outer diameter, length, wall thickness → hollow shell |
 | **Transitions** | Fore/aft diameters, conical or shaped shoulder |
-| **Fin sets** | Trapezoidal, elliptical; angular pattern; tab geometry |
+| **Fin sets** | Trapezoidal, elliptical, freeform (approximated as a bounding trapezoid); angular pattern; tab geometry |
 | **Motor mounts** | Inner tube as hollow cylinder |
 | **Launch lugs** | Hollow cylinder at attachment point |
+| **Centering rings** | Thin annular disc between motor mount and body tube |
+| **Tube couplers** | Internal sleeve joining two body tube sections |
+| **Bulkheads** | Solid disc sealing off a body tube |
+| **Engine blocks** | Ring seating the motor casing against the tube |
 | **Missing params** | UI prompts for wall thickness when absent from .ork |
 | **Output** | AP214-compliant STEP — opens natively in Fusion 360 |
 
@@ -283,7 +287,64 @@ If that works, your installation is complete.
 
 ---
 
-## Project Structure
+## Troubleshooting
+
+### Same error keeps happening no matter what you change
+
+If you've edited a backend file, or restarted the app, and it still behaves
+like the old version — same bug, same error, no change at all — there's
+almost always an **old backend process still running in the background**,
+quietly answering requests instead of the one you just started. Python
+doesn't reload a file just because it changed on disk; the old process
+has to actually be killed.
+
+This is especially likely if you ever closed a Terminal window/tab
+instead of properly using `stop.command` — closing the window doesn't
+reliably stop the backend process running underneath it, so it keeps
+running and keeps holding onto port 8000.
+
+**Fix — do this whenever things seem "stuck":**
+
+```bash
+lsof -i :8000
+```
+
+This lists whatever's currently using port 8000, including its PID
+(process ID). Then:
+
+```bash
+kill -9 <PID>
+```
+
+(swap in the actual number from the previous command). Now restart the
+app fresh — Desktop icon, or `./start.command`/`docker compose up --build`
+— and try again. It's safe to run `lsof -i :8000` any time; if nothing's
+running there, it just prints nothing.
+
+**When to reach for this:**
+- You edited `main.py`, `ork_parser.py`, or `cad_builder.py` directly
+- You're not sure whether an earlier run of the app is still around
+- A previous session's terminal got closed without running `stop.command`
+- Generating a STEP file gives an error that doesn't match what the code
+  currently does
+
+### macOS says a `.command` file "could not verify" it's malware-free
+
+Covered above in step 3 of the Docker install — right-clicking and choosing
+Open isn't reliable for this; run it from Terminal instead so the
+`xattr -rd com.apple.quarantine` step can strip the block first.
+
+### A part is missing from the STEP output with no error shown
+
+Check the parse summary shown after upload — any component type ork2step
+doesn't support yet (bulkheads and engine blocks are supported now;
+things like shock cords, parachutes, and multi-stage boosters/pods
+currently aren't) is listed under **"Not yet supported — excluded from
+the STEP output"** instead of just silently vanishing. If something's
+missing and *isn't* listed there, that's worth reporting as a bug rather
+than an expected gap.
+
+---
 
 ```
 ork2step/
@@ -323,8 +384,9 @@ User uploads .ork
         │  validates ZIP/XML structure
         ▼
 [ OrkParser ]               ork_parser.py
-        │  extracts: NoseCone, BodyTube, Transition,
-        │            FinSet, MotorMount, LaunchLug
+        │  extracts: NoseCone, BodyTube, Transition, FinSet,
+        │            MotorMount, LaunchLug, CenteringRing,
+        │            TubeCoupler, Bulkhead, EngineBlock
         │  detects missing CAD params (wall thickness)
         ▼
 [ Intermediate Model ]      Python dataclasses
@@ -433,10 +495,12 @@ is sampled at 80 points and passed to CadQuery's spline → revolve pipeline.
 
 | Issue | Workaround |
 |---|---|
-| Freeform fins (spline outline) | Rendered as trapezoid — edit in Fusion 360 |
+| Freeform fins (spline outline) | Approximated as a bounding trapezoid (root/tip chord, span, sweep taken from the outline's extremes) — not an exact match to the curved outline. Edit further in Fusion 360 if needed. |
+| Shock cords, parachutes | Not modelled — these don't produce CAD geometry; listed under "not yet supported" in the parse summary instead of silently vanishing |
+| Multi-stage boosters and pods | Not yet supported — the parser currently only reads top-level stages, not nested parallel stages/pods. This is a bigger architectural change, not just a new shape. |
 | Launch lug radial position | Placed at origin; move in Fusion 360 assembly |
-| Multi-stage ignition gaps | Stage separation modelled geometrically; no dynamics |
-| Very old .ork (pre-1.5) | May use different XML schema — open a GitHub issue |
+| Very old .ork (pre-1.5) | May use a different XML schema — open a GitHub issue |
+| Component names | Different OpenRocket versions serialize the name field as either `<name>` or the abbreviated `<n>` — the parser checks both, but if you hit a file where a name still doesn't come through right, that's worth reporting |
 
 ---
 
