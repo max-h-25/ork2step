@@ -245,12 +245,23 @@ class CadBuilder:
 
         solids = [solid]
 
-        # ---- Shoulder: the cylindrical plug that inserts into the body tube
+        # ---- Shoulder: the cylindrical plug that inserts into the body tube.
+        # Fused into the main nose body with a single union — this is safe
+        # (just 2 solids, one flat coincident face) unlike the N-way fin
+        # union avoided earlier, which risked repeated-boolean crashes.
         if nc.shoulder_length > 0 and nc.shoulder_diameter > 0:
             try:
-                solids.append(self._nose_shoulder(nc, L))
+                shoulder = self._nose_shoulder(nc, L)
+                fused = solid.union(shoulder)
+                solids = [fused]
             except Exception:
-                pass  # nose body is still valid even if the shoulder fails
+                # If the union fails, still include the shoulder as a
+                # separate (touching but unfused) solid rather than
+                # dropping it entirely.
+                try:
+                    solids.append(self._nose_shoulder(nc, L))
+                except Exception:
+                    pass  # nose body is still valid even if the shoulder fails
 
         return solids
 
@@ -460,7 +471,9 @@ class CadBuilder:
             cq.Workplane("XZ")
             .polyline(pts)
             .close()
-            .extrude(thickness, both=True)
+            # extrude(d, both=True) extrudes d in EACH direction (total 2d),
+            # so pass half the target thickness to get the real thickness.
+            .extrude(thickness / 2, both=True)
         )
         # Move fin so root sits at x=0 and fin extends outward
         return fin
@@ -472,7 +485,7 @@ class CadBuilder:
         fin = (
             cq.Workplane("XZ")
             .ellipse(span, root / 2)
-            .extrude(thickness, both=True)
+            .extrude(thickness / 2, both=True)
             .translate((span, root / 2, 0))  # move so base is at x=0
         )
         return fin
