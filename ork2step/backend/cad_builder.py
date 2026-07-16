@@ -444,6 +444,17 @@ class CadBuilder:
         span  = _mm(fs.span)
         sweep = _mm(fs.sweep_length)
 
+        if root <= 0 or span <= 0:
+            # Building a fin with zero root chord or zero span means an
+            # empty/degenerate 2-D profile — OCCT would fail on this with
+            # an opaque "BRep_API: command not done" rather than a message
+            # that points at the actual cause. Fail clearly instead.
+            raise CadBuildError(
+                f"FinSet '{fs.name}' has invalid dimensions "
+                f"(root={root:.2f}mm, tip={tip:.2f}mm, span={span:.2f}mm) — "
+                "can't build fin geometry from this."
+            )
+
         if fs.shape == FinShape.ELLIPTICAL:
             fin_solid = self._elliptical_fin(root, span, thickness_mm)
         else:
