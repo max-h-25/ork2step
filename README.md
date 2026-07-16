@@ -3,6 +3,15 @@
 Convert `.ork` (OpenRocket) files into fully editable STEP solids for import
 into Autodesk Fusion 360, FreeCAD, SolidWorks, or any STEP-capable CAD tool.
 
+> **Works on Windows, macOS, and Linux.** The actual conversion (parsing the
+> `.ork` file and building the CAD geometry) is plain Python and runs
+> identically everywhere. The one Mac-only piece is the `.command` files /
+> Desktop-icon install flow (step 3 under Option A below) — that's just a
+> convenience launcher specific to macOS. On Windows or Linux, skip straight
+> to **step 4 under Option A** (`docker compose up --build`, no OS-specific
+> setup) or use **Option B** (manual Python + Node setup), which already has
+> separate Windows/Linux instructions throughout.
+
 ---
 
 ## Features
@@ -25,6 +34,12 @@ into Autodesk Fusion 360, FreeCAD, SolidWorks, or any STEP-capable CAD tool.
 ---
 
 ## Installation
+
+> **Windows or Linux?** Skip the "(macOS only)" step below — that's a
+> convenience launcher for Mac and won't run on your OS. Go straight to
+> **Option A, step 4** (`docker compose up --build`, works everywhere)
+> or **Option B** (manual setup — has separate instructions for each OS).
+> Everything else on this page works the same across all three platforms.
 
 There are two ways to run ork2step: **Docker** (easiest, works on any OS) or
 **manual setup** (Python + Node.js installed directly on your machine).
@@ -66,6 +81,8 @@ cd ork2step
 ```
 
 #### 3. (macOS only) Set up the desktop icon
+
+> Windows and Linux users: this step doesn't apply to you — skip to step 4 below.
 
 Open **Terminal**, paste this single line, and press Enter:
 
@@ -301,30 +318,41 @@ has to actually be killed.
 This is especially likely if you ever closed a Terminal window/tab
 instead of properly using `stop.command` — closing the window doesn't
 reliably stop the backend process running underneath it, so it keeps
-running and keeps holding onto port 8000.
+running and keeps holding onto port 8000. (Windows/Linux users running
+the manual setup: this is equally likely if you closed a Command
+Prompt/PowerShell/terminal window instead of pressing `Ctrl+C`.)
 
 **Fix — do this whenever things seem "stuck":**
 
+**macOS / Linux:**
 ```bash
 lsof -i :8000
 ```
-
 This lists whatever's currently using port 8000, including its PID
 (process ID). Then:
-
 ```bash
 kill -9 <PID>
 ```
 
-(swap in the actual number from the previous command). Now restart the
-app fresh — Desktop icon, or `./start.command`/`docker compose up --build`
-— and try again. It's safe to run `lsof -i :8000` any time; if nothing's
-running there, it just prints nothing.
+**Windows (Command Prompt or PowerShell):**
+```
+netstat -ano | findstr :8000
+```
+The last column of the matching line is the PID. Then:
+```
+taskkill /PID <PID> /F
+```
+
+(swap in the actual number from the previous command, on either OS). Now
+restart the app fresh — Desktop icon (macOS), or
+`./start.command`/`docker compose up --build`/`uvicorn ...` — and try
+again. It's safe to run these check commands any time; if nothing's
+running on that port, they just come back empty.
 
 **When to reach for this:**
 - You edited `main.py`, `ork_parser.py`, or `cad_builder.py` directly
 - You're not sure whether an earlier run of the app is still around
-- A previous session's terminal got closed without running `stop.command`
+- A previous session's terminal got closed without stopping the backend properly
 - Generating a STEP file gives an error that doesn't match what the code
   currently does
 
@@ -346,6 +374,8 @@ than an expected gap.
 
 ---
 
+## Project Structure
+
 ```
 ork2step/
 ├── backend/
@@ -364,13 +394,17 @@ ork2step/
 │   └── Dockerfile
 ├── examples/
 │   └── alpha_iii_example.ork   # Minimal test file (raw XML)
-├── ork2step.app/                # macOS app bundle (desktop icon)
-├── install.command              # Run once — creates Desktop icon
-├── start.command                # Start the app manually
-├── stop.command                 # Stop the app cleanly
+├── ork2step.app/                # macOS-only — app bundle for the Desktop icon
+├── install.command              # macOS-only — run once, creates Desktop icon
+├── start.command                # macOS-only — start the app manually
+├── stop.command                 # macOS-only — stop the app cleanly
 ├── docker-compose.yml
 └── README.md
 ```
+
+> On Windows/Linux, ignore the four macOS-only entries above — you'll use
+> `docker compose up --build` or the manual Python/Node setup instead,
+> both covered earlier in this README.
 
 ---
 
