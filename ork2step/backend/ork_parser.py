@@ -83,6 +83,10 @@ class NoseCone(RocketComponent):
     base_diameter: float = 0.0     # m
     thickness: float = 0.002       # m  (wall; default 2 mm)
     shape_parameter: float = 0.0   # used by power/haack/parabolic
+    shoulder_length: float = 0.0     # m — 0 means no shoulder
+    shoulder_diameter: float = 0.0   # m
+    shoulder_thickness: float = 0.0  # m — 0 means solid shoulder
+    shoulder_capped: bool = True     # whether the shoulder's aft end is closed
 
 
 @dataclass
@@ -141,6 +145,21 @@ class CenteringRing(RocketComponent):
 class TubeCoupler(RocketComponent):
     outer_diameter: float = 0.0    # m
     inner_diameter: float = 0.0    # m
+    length: float = 0.0            # m
+
+
+@dataclass
+class Bulkhead(RocketComponent):
+    """A solid disk that seals off a body tube — no center hole."""
+    outer_diameter: float = 0.0    # m
+    length: float = 0.0            # m — thickness, along the axis
+
+
+@dataclass
+class EngineBlock(RocketComponent):
+    """A ring that seats the front of the motor casing against the tube."""
+    outer_diameter: float = 0.0    # m
+    inner_diameter: float = 0.0    # m — motor casing / nozzle clearance hole
     length: float = 0.0            # m
 
 
@@ -318,6 +337,8 @@ class OrkParser:
             "innertube":   self._parse_body_tube,
             "centeringring": self._parse_centering_ring,
             "tubecoupler": self._parse_tube_coupler,
+            "bulkhead": self._parse_bulkhead,
+            "engineblock": self._parse_engine_block,
         }
         handler = handlers.get(tag)
         if handler:
@@ -387,6 +408,14 @@ class OrkParser:
         shape_str = el.findtext("shape", "ogive")
         thickness = self._require_thickness(el, name, default=0.002)
 
+        shoulder_len = self._f(el, "aftshoulderlength", 0.0)
+        shoulder_diam = self._f(el, "aftshoulderradius", 0.0) * 2
+        if shoulder_diam == 0:
+            shoulder_diam = self._f(el, "aftshoulderdiameter", 0.0)
+        shoulder_thickness = self._f(el, "aftshoulderthickness", 0.0)
+        shoulder_capped_txt = el.findtext("aftshouldercapped", "true")
+        shoulder_capped = shoulder_capped_txt.strip().lower() != "false"
+
         return NoseCone(
             name=name,
             axial_offset=axial_offset,
@@ -395,6 +424,10 @@ class OrkParser:
             base_diameter=base_diam,
             thickness=thickness,
             shape_parameter=self._f(el, "shapeparameter", 0.0),
+            shoulder_length=shoulder_len,
+            shoulder_diameter=shoulder_diam,
+            shoulder_thickness=shoulder_thickness,
+            shoulder_capped=shoulder_capped,
         )
 
     def _parse_body_tube(self, el: etree._Element, axial_offset: float) -> BodyTube:
@@ -546,6 +579,36 @@ class OrkParser:
             length=length,
         )
 
+    def _parse_bulkhead(self, el: etree._Element, axial_offset: float) -> Bulkhead:
+        name = el.findtext("name", "Bulkhead")
+        od = self._f(el, "outerdiameter", 0)
+        if od == 0:
+            od = self._f(el, "outerradius", 0) * 2
+        length = self._f(el, "length", 0.003)  # bulkheads are usually thin discs
+        return Bulkhead(
+            name=name,
+            axial_offset=axial_offset,
+            outer_diameter=od,
+            length=length,
+        )
+
+    def _parse_engine_block(self, el: etree._Element, axial_offset: float) -> EngineBlock:
+        name = el.findtext("name", "Engine Block")
+        od = self._f(el, "outerdiameter", 0)
+        if od == 0:
+            od = self._f(el, "outerradius", 0) * 2
+        id_ = self._f(el, "innerdiameter", 0)
+        if id_ == 0:
+            id_ = self._f(el, "innerradius", 0) * 2
+        length = self._f(el, "length", 0.005)
+        return EngineBlock(
+            name=name,
+            axial_offset=axial_offset,
+            outer_diameter=od,
+            inner_diameter=id_,
+            length=length,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Pretty-print helper (for debugging / UI preview)
@@ -618,6 +681,17 @@ def _fmt_component(comp) -> str:
     if isinstance(comp, TubeCoupler):
         return (
             f"{prefix}TubeCoupler '{comp.name}': "
+            f"OD={comp.outer_diameter*1000:.1f}mm, ID={comp.inner_diameter*1000:.1f}mm, "
+            f"L={comp.length*1000:.1f}mm"
+        )
+    if isinstance(comp, Bulkhead):
+        return (
+            f"{prefix}Bulkhead '{comp.name}': "
+            f"OD={comp.outer_diameter*1000:.1f}mm, L={comp.length*1000:.1f}mm"
+        )
+    if isinstance(comp, EngineBlock):
+        return (
+            f"{prefix}EngineBlock '{comp.name}': "
             f"OD={comp.outer_diameter*1000:.1f}mm, ID={comp.inner_diameter*1000:.1f}mm, "
             f"L={comp.length*1000:.1f}mm"
         )
