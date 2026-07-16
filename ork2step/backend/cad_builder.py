@@ -36,6 +36,7 @@ except ImportError:
 
 from ork_parser import (
     Rocket, NoseCone, BodyTube, Transition, FinSet, MotorMount, LaunchLug,
+    CenteringRing, TubeCoupler,
     NoseShape, FinShape, _walk_list,
 )
 
@@ -168,6 +169,10 @@ class CadBuilder:
                 return [self._motor_mount(comp)], 0.0
             if isinstance(comp, LaunchLug):
                 return [self._launch_lug(comp)], 0.0
+            if isinstance(comp, CenteringRing):
+                return [self._centering_ring(comp)], 0.0
+            if isinstance(comp, TubeCoupler):
+                return [self._tube_coupler(comp)], 0.0
         except Exception as exc:
             raise CadBuildError(
                 f"Failed to build component '{comp.name}': {exc}"
@@ -195,7 +200,7 @@ class CadBuilder:
         outer_pts = []
         for i in range(n + 1):
             frac = i / n
-            r = self._nose_radius_at(nc.shape, frac, R, nc.shape_parameter)
+            r = self._nose_radius_at(nc.shape, frac, R, nc.shape_parameter, L)
             z = frac * L
             outer_pts.append((r, z))
 
@@ -220,10 +225,11 @@ class CadBuilder:
         # Hollow out the inside
         if t > 0 and Ri > 1.0:
             try:
+                inner_L = max(L - t, 1.0)
                 wp2 = cq.Workplane("XZ").moveTo(0, t)
                 for i in range(1, n + 1):
                     frac = i / n
-                    r = self._nose_radius_at(nc.shape, frac, Ri, nc.shape_parameter)
+                    r = self._nose_radius_at(nc.shape, frac, Ri, nc.shape_parameter, inner_L)
                     z = t + frac * (L - t)
                     wp2 = wp2.lineTo(r, z)
                 wp2 = wp2.lineTo(0, L).close()
@@ -250,7 +256,7 @@ class CadBuilder:
         for i in range(n + 1):
             t = i / n          # 0 → 1
             z = t * L
-            x = self._nose_radius_at(shape, t, R, param)
+            x = self._nose_radius_at(shape, t, R, param, L)
             pts.append((x, z))
         # Append base-edge closing points
         pts.append((R, L))
@@ -258,15 +264,27 @@ class CadBuilder:
         return pts
 
     @staticmethod
-    def _nose_radius_at(shape: NoseShape, t: float, R: float, param: float) -> float:
-        """Radius of the nose cone at fractional position t ∈ [0,1]."""
+    def _nose_radius_at(shape: NoseShape, t: float, R: float, param: float, L: float = 1.0) -> float:
+        """
+        Radius of the nose cone at fractional position t ∈ [0,1].
+
+        L (actual nose length, same units as R) matters for OGIVE: unlike
+        conical/ellipsoid/power/Haack, a tangent-ogive's curvature genuinely
+        depends on the R/L aspect ratio, not just R. Passing the wrong
+        (or a normalized-but-unscaled) L here previously made the ogive
+        formula degenerate to an almost-constant radius — i.e. a cylinder
+        instead of a tapered nose. Defaults to 1.0 for shapes that don't
+        use it, so existing callers that don't pass L still work.
+        """
         if t == 0:
             return 0.0
         if shape == NoseShape.CONICAL:
             return R * t
         if shape == NoseShape.OGIVE:
-            rho_n = (R**2 + 1.0) / (2 * R)
-            val = math.sqrt(max(rho_n**2 - (1 - t)**2, 0)) - (rho_n - R)
+            L = L if L > 0 else 1.0
+            rho = (R**2 + L**2) / (2 * R) if R > 0 else 0.0
+            x = t * L
+            val = math.sqrt(max(rho**2 - (L - x)**2, 0)) - (rho - R)
             return max(val, 0.0)
         if shape == NoseShape.ELLIPSOID:
             return R * math.sqrt(1 - (1 - t)**2)
@@ -427,6 +445,40 @@ class CadBuilder:
         OD = _mm(ll.outer_diameter) or 12.0
         ID = _mm(ll.inner_diameter) or 9.0
         L  = _mm(ll.length) or 40.0
+
+        return (
+            cq.Workplane("XY")
+            .circle(OD / 2)
+            .circle(ID / 2)
+            .extrude(L)
+        )
+
+    # ---- Centering Ring ---------------------------------------------------
+
+    def _centering_ring(self, cr: CenteringRing) -> cq.Workplane:
+        """A thin annular disk — sits between a motor mount and body tube."""
+        OD = _mm(cr.outer_diameter) or 40.0
+        ID = _mm(cr.inner_diameter) or 25.0
+        L  = _mm(cr.length) or 3.0
+        if ID >= OD:
+            ID = max(OD - 2.0, 1.0)  # guard against degenerate/zero-clearance rings
+
+        return (
+            cq.Workplane("XY")
+            .circle(OD / 2)
+            .circle(ID / 2)
+            .extrude(L)
+        )
+
+    # ---- Tube Coupler -------------------------------------------------------
+
+    def _tube_coupler(self, tc: TubeCoupler) -> cq.Workplane:
+        """A short internal sleeve that joins two body tube sections."""
+        OD = _mm(tc.outer_diameter) or 40.0
+        ID = _mm(tc.inner_diameter) or 36.0
+        L  = _mm(tc.length) or 50.0
+        if ID >= OD:
+            ID = max(OD - 4.0, 1.0)
 
         return (
             cq.Workplane("XY")
