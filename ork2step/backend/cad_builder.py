@@ -267,20 +267,42 @@ class CadBuilder:
 
     def _nose_shoulder(self, nc: NoseCone, nose_length_mm: float) -> cq.Workplane:
         """
-        Build the shoulder as a short tube (or solid plug, if capped)
-        extending aft from the base of the nose (z = nose_length_mm
-        onward), sized to slide into the body tube.
+        Build the shoulder as a hollow tube extending aft from the base of
+        the nose (z = nose_length_mm onward), sized to slide into the body
+        tube. If "capped" and a wall thickness is given, the far (aft) end
+        is sealed with a thin disc — closing off the nose assembly's
+        interior there — while the shoulder itself, and the rest of the
+        nose cone, stay hollow rather than becoming a solid plug.
         """
         sh_OD = _mm(nc.shoulder_diameter)
         sh_L  = _mm(nc.shoulder_length)
         sh_t  = _mm(nc.shoulder_thickness)
 
-        if nc.shoulder_capped or sh_t <= 0 or sh_t >= sh_OD / 2:
+        if sh_t <= 0 or sh_t >= sh_OD / 2:
+            # No usable wall thickness given — can't build a meaningful
+            # hollow tube + cap, so fall back to a solid plug.
             shoulder = cq.Workplane("XY").circle(sh_OD / 2).extrude(sh_L)
         else:
             shoulder = self._hollow_tube(
                 sh_OD, sh_OD - 2 * sh_t, sh_L, label=f"NoseCone shoulder '{nc.name}'"
             )
+            if nc.shoulder_capped:
+                # Seal the bore at the far (aft) end with a thin disc,
+                # rather than at the near end — that keeps the shoulder
+                # (and everything ahead of it, back to the nose tip)
+                # open and hollow, only closing off the far end.
+                cap_thickness = min(sh_t, sh_L)
+                inner_r = (sh_OD - 2 * sh_t) / 2
+                cap = (
+                    cq.Workplane("XY")
+                    .circle(inner_r)
+                    .extrude(cap_thickness)
+                    .translate((0, 0, sh_L - cap_thickness))
+                )
+                try:
+                    shoulder = shoulder.union(cap)
+                except Exception:
+                    pass  # keep the open hollow tube if the cap union fails
 
         # Position it starting right where the nose body's base ends.
         return shoulder.translate((0, 0, nose_length_mm))
