@@ -280,7 +280,7 @@ class OrkParser:
                 )
 
         rocket = Rocket(
-            name=rocket_el.findtext("name", "Unnamed Rocket"),
+            name=self._name(rocket_el, "Unnamed Rocket"),
             designer=rocket_el.findtext("designer", ""),
             comment=rocket_el.findtext("comment", ""),
         )
@@ -347,13 +347,26 @@ class OrkParser:
         # dropping it, so it's visible to the user (and to us) instead
         # of a part just quietly not appearing in the output.
         if tag not in ("subcomponents",):
-            name = el.findtext("name", tag)
+            name = self._name(el, tag)
             self.skipped_components.append(f"{tag} '{name}'")
         return None
 
     # ------------------------------------------------------------------
     # Individual component parsers
     # ------------------------------------------------------------------
+
+    def _name(self, el: etree._Element, default: str) -> str:
+        """
+        Read a component's display name, handling both tag spellings seen
+        in real .ork files: some exports use <name>, others abbreviate to
+        <n>. Checking only <name> meant files using <n> silently fell back
+        to the hardcoded default for every component — it went unnoticed
+        because the defaults happen to match typical OpenRocket names.
+        """
+        val = el.findtext("name")
+        if val is None:
+            val = el.findtext("n")
+        return val if val is not None else default
 
     def _f(self, el: etree._Element, tag: str, default: float = 0.0) -> float:
         """
@@ -400,7 +413,7 @@ class OrkParser:
         return val
 
     def _parse_nose_cone(self, el: etree._Element, axial_offset: float) -> NoseCone:
-        name = el.findtext("name", "Nose Cone")
+        name = self._name(el, "Nose Cone")
         length = self._f(el, "length")
         base_diam = self._f(el, "aftradius", 0) * 2 or self._f(el, "radius", 0) * 2
         if base_diam == 0:
@@ -431,7 +444,7 @@ class OrkParser:
         )
 
     def _parse_body_tube(self, el: etree._Element, axial_offset: float) -> BodyTube:
-        name = el.findtext("name", "Body Tube")
+        name = self._name(el, "Body Tube")
         # OpenRocket stores radius (not diameter) here, and it may be in
         # "auto <value>" format if the user set diameter to Automatic —
         # _f() resolves that for us now.
@@ -457,7 +470,7 @@ class OrkParser:
         return tube
 
     def _parse_transition(self, el: etree._Element, axial_offset: float) -> Transition:
-        name = el.findtext("name", "Transition")
+        name = self._name(el, "Transition")
         fore_r = self._f(el, "foreradius", 0)
         aft_r  = self._f(el, "aftradius", 0)
         # Some versions use foreouterdiameter / aftouterdiameter
@@ -478,7 +491,7 @@ class OrkParser:
         )
 
     def _parse_fin_set(self, el: etree._Element, axial_offset: float) -> FinSet:
-        name = el.findtext("name", "Fin Set")
+        name = self._name(el, "Fin Set")
         tag  = el.tag.lower()
 
         shape = FinShape.TRAPEZOIDAL
@@ -488,14 +501,26 @@ class OrkParser:
             shape = FinShape.FREEFORM
 
         count      = int(self._f(el, "fincount", 3))
-        root_chord = self._f(el, "rootchord")
-        tip_chord  = self._f(el, "tipchord", 0)
-        span       = self._f(el, "height") or self._f(el, "span")
-        sweep      = self._f(el, "sweeplength", 0)
         thickness  = self._f(el, "thickness", 0.003)
         cant       = self._f(el, "cant", 0)
         tab_len    = self._f(el, "tablength", 0)
         tab_ht     = self._f(el, "tabheight", 0)
+
+        if shape == FinShape.FREEFORM:
+            # Freeform fins store an explicit outline (<finpoints>), not
+            # rootchord/tipchord/height/sweeplength — those tags don't
+            # exist on this element at all, so reading them (as the code
+            # used to) always silently returned 0 for every dimension,
+            # producing degenerate (zero-area) geometry that crashes the
+            # CAD kernel on extrude. Approximate the real outline with its
+            # bounding trapezoid instead (documented limitation: freeform
+            # fins render as a trapezoid, not their exact curved outline).
+            root_chord, tip_chord, span, sweep = self._freeform_fin_bbox(el)
+        else:
+            root_chord = self._f(el, "rootchord")
+            tip_chord  = self._f(el, "tipchord", 0)
+            span       = self._f(el, "height") or self._f(el, "span")
+            sweep      = self._f(el, "sweeplength", 0)
 
         return FinSet(
             name=name,
@@ -512,8 +537,49 @@ class OrkParser:
             tab_height=tab_ht,
         )
 
+    def _freeform_fin_bbox(
+        self, el: etree._Element
+    ) -> tuple[float, float, float, float]:
+        """
+        Extract (root_chord, tip_chord, span, sweep_length) as a bounding
+        trapezoid from a freeform fin's <finpoints> outline. Points are
+        (x=position along chord, y=height above the body tube), root
+        line at y≈min(y), tip line at y≈max(y).
+        """
+        pts_el = el.find("finpoints")
+        if pts_el is None:
+            return 0.0, 0.0, 0.0, 0.0
+
+        pts = []
+        for p in pts_el.findall("point"):
+            try:
+                x = float(p.get("x", "0"))
+                y = float(p.get("y", "0"))
+                pts.append((x, y))
+            except (TypeError, ValueError):
+                continue
+
+        if len(pts) < 3:
+            return 0.0, 0.0, 0.0, 0.0
+
+        ys = [p[1] for p in pts]
+        min_y, max_y = min(ys), max(ys)
+        span = max_y - min_y
+        if span <= 0:
+            return 0.0, 0.0, 0.0, 0.0
+
+        tol = max(span * 1e-6, 1e-9)
+        root_pts = [p for p in pts if abs(p[1] - min_y) < tol]
+        tip_pts = [p for p in pts if abs(p[1] - max_y) < tol]
+
+        root_chord = (max(p[0] for p in root_pts) - min(p[0] for p in root_pts)) if root_pts else 0.0
+        tip_chord = (max(p[0] for p in tip_pts) - min(p[0] for p in tip_pts)) if tip_pts else 0.0
+        sweep = (min(p[0] for p in tip_pts) - min(p[0] for p in root_pts)) if (root_pts and tip_pts) else 0.0
+
+        return root_chord, tip_chord, span, sweep
+
     def _parse_motor_mount(self, el: etree._Element, axial_offset: float) -> MotorMount:
-        name = el.findtext("name", "Motor Mount")
+        name = self._name(el, "Motor Mount")
         inner_r = self._f(el, "innerradius", 0)
         inner_d = self._f(el, "innerdiameter", inner_r * 2)
         if inner_d == 0:
@@ -527,7 +593,7 @@ class OrkParser:
         )
 
     def _parse_launch_lug(self, el: etree._Element, axial_offset: float) -> LaunchLug:
-        name = el.findtext("name", "Launch Lug")
+        name = self._name(el, "Launch Lug")
         od = self._f(el, "outerdiameter", 0) or self._f(el, "radius", 0) * 2
         id_ = self._f(el, "innerdiameter", 0) or self._f(el, "innerradius", 0) * 2
         length = self._f(el, "length")
@@ -540,7 +606,7 @@ class OrkParser:
         )
 
     def _parse_centering_ring(self, el: etree._Element, axial_offset: float) -> CenteringRing:
-        name = el.findtext("name", "Centering Ring")
+        name = self._name(el, "Centering Ring")
         od = self._f(el, "outerdiameter", 0)
         if od == 0:
             od = self._f(el, "outerradius", 0) * 2
@@ -557,7 +623,7 @@ class OrkParser:
         )
 
     def _parse_tube_coupler(self, el: etree._Element, axial_offset: float) -> TubeCoupler:
-        name = el.findtext("name", "Tube Coupler")
+        name = self._name(el, "Tube Coupler")
         od = self._f(el, "outerdiameter", 0)
         if od == 0:
             od = self._f(el, "outerradius", 0) * 2
@@ -580,7 +646,7 @@ class OrkParser:
         )
 
     def _parse_bulkhead(self, el: etree._Element, axial_offset: float) -> Bulkhead:
-        name = el.findtext("name", "Bulkhead")
+        name = self._name(el, "Bulkhead")
         od = self._f(el, "outerdiameter", 0)
         if od == 0:
             od = self._f(el, "outerradius", 0) * 2
@@ -593,7 +659,7 @@ class OrkParser:
         )
 
     def _parse_engine_block(self, el: etree._Element, axial_offset: float) -> EngineBlock:
-        name = el.findtext("name", "Engine Block")
+        name = self._name(el, "Engine Block")
         od = self._f(el, "outerdiameter", 0)
         if od == 0:
             od = self._f(el, "outerradius", 0) * 2
